@@ -59,3 +59,35 @@ CUDA 衍生品定价、风险估计与 CPU reference 工程。
 - 本地 CPU：`cmake --build build -j && ctest --test-dir build --output-on-failure`
 - 服务器 GPU：`python3 scripts/run_gpu_validation.py --binary build/derivatives_pricer --output-dir outputs/gpu_validation`
 - 多 GPU：在至少两张卡可见时追加 `--include-multi-gpu`。
+
+### 2026-09-09 — 迭代 #2：American Gamma 诊断与实验设计更新
+
+**改动原因**：RTX 5090 实测中，50,000 路径的 American pseudo 仅 Gamma 失败；提高到 200,000 路径后所有指标通过，且 American Halton 的 CPU/GPU 输出逐项一致。
+**诊断证据**：
+- 50k pseudo Gamma：CPU `0.0351127`、GPU `0.0233494`，绝对差约 `0.01176`，略高于 `0.01` 门限。
+- 200k pseudo Gamma：CPU `0.0225246`、GPU `0.0233072`，绝对差约 `0.000783`，通过门限。
+- Halton：price、Delta、Gamma、Vega 的 CPU/GPU 绝对差均为 `0`；这证明实现路径一致，但负 Gamma 不单独作为绝对精度结论。
+**改动范围**：只调整 American 正式验证配置与矩阵容错/汇总行为，不修改定价模型、LSM 或容差。
+**文档同步**：idea_report.md 是 | implementation.md 是 | configs/ 待完成
+
+### 2026-09-09 — 迭代 #2：正式矩阵配置与失败汇总实现
+
+**改动原因**：50k American pseudo 的二阶有限差分噪声会偶发触发 Gamma 门禁，且原驱动器在首个失败后中止，无法得到完整矩阵。
+**改动内容**：
+- `configs/simulation_american_validation.txt`：固定 200,000 路径、seed `20260824` 与 1% spot bump，专供 American pseudo 正式 gate。
+- `scripts/run_gpu_validation.py`：American pseudo 使用专用配置；单案例失败后继续；删除陈旧 comparison；总表保留执行失败行；全部完成后统一非零退出。
+- `README.md`、`REPORT.md`：同步正式运行口径，并区分 Halton 实现一致性证据与 CRR 绝对精度证据。
+**预期效果**：不放宽统计容差的前提下稳定验证 American Gamma，并保证失败矩阵也能留下完整、可审计的报告产物。
+**文档同步**：idea_report.md 是 | implementation.md 是 | configs/ 是
+
+### 2026-09-09 — 迭代 #2 结果
+
+| 指标 | 改动前 | 改动后 | 变化 |
+|---|---:|---:|---|
+| American pseudo 通过路径数 | 50,000（Gamma 失败） | 200,000（四项通过） | 稳定通过 |
+| American pseudo Gamma 绝对差 | 约 0.01176 | 约 0.000783 | 降低约 93.3% |
+| American Halton CPU/GPU 差 | 未执行 | 四项均为 0 | 实现一致 |
+| Release CPU CTest | 1/1 通过 | 1/1 通过 | 保持 |
+| 无 CUDA 失败路径覆盖 | 首个 case 后中止 | 8/8 case 均执行并汇总 | 完整 |
+
+**结论**：迭代有效。服务器证据支持将原失败归因于 50k 路径下 American LSM Gamma 的统计波动；没有放宽门限或更改算法。本地无 CUDA 演练确认矩阵会保留完整失败清单和汇总产物。更新后的真实 CUDA 全矩阵仍需在 RTX 5090 上复跑后归档。

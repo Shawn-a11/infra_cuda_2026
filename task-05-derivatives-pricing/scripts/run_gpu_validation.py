@@ -89,7 +89,11 @@ def main() -> None:
         ("heston_qmc", "heston_call.txt", "simulation_qmc_smoke.txt"),
         ("local_vol_pseudo", "local_vol_call.txt", "simulation_advanced_smoke.txt"),
         ("local_vol_qmc", "local_vol_call.txt", "simulation_qmc_smoke.txt"),
-        ("american_pseudo", "american_put.txt", "simulation_advanced_smoke.txt"),
+        (
+            "american_pseudo",
+            "american_put.txt",
+            "simulation_american_validation.txt",
+        ),
         ("american_qmc", "american_put.txt", "simulation_qmc_smoke.txt"),
     ]
     if args.include_multi_gpu:
@@ -97,27 +101,48 @@ def main() -> None:
     args.output_dir.mkdir(parents=True, exist_ok=True)
     write_environment(args.output_dir)
     summary: list[dict[str, str]] = []
+    failures: list[str] = []
     for name, option, simulation in cases:
         case_dir = args.output_dir / name
-        subprocess.run(
+        comparison_path = case_dir / "comparison.csv"
+        # 删除同目录的旧比较表，避免本次后端崩溃时误读历史结果。
+        comparison_path.unlink(missing_ok=True)
+        completed = subprocess.run(
             [
                 sys.executable, str(compare), "--binary", str(binary),
                 "--option", str(root / "configs" / option),
                 "--simulation", str(root / "configs" / simulation),
                 "--output-dir", str(case_dir),
             ],
-            check=True,
+            check=False,
         )
-        with (case_dir / "comparison.csv").open(encoding="utf-8") as stream:
-            for row in csv.DictReader(stream):
-                summary.append(
-                    {
-                        "case": name,
-                        "option_config": option,
-                        "simulation_config": simulation,
-                        **row,
-                    }
-                )
+        if completed.returncode != 0:
+            failures.append(name)
+        if comparison_path.is_file():
+            with comparison_path.open(encoding="utf-8") as stream:
+                comparison_rows = list(csv.DictReader(stream))
+        else:
+            # 即使单案例在生成比较表前失败，也在总表中留下可追踪记录。
+            comparison_rows = [
+                {
+                    "metric": "execution",
+                    "cpu": "",
+                    "gpu": "",
+                    "absolute_difference": "",
+                    "tolerance": "",
+                    "passed": "false",
+                    "rule": f"compare_cpu_gpu exited with {completed.returncode}",
+                }
+            ]
+        for row in comparison_rows:
+            summary.append(
+                {
+                    "case": name,
+                    "option_config": option,
+                    "simulation_config": simulation,
+                    **row,
+                }
+            )
     if not summary:
         raise RuntimeError("GPU validation matrix produced no comparison rows")
     with (args.output_dir / "summary.csv").open(
@@ -127,11 +152,19 @@ def main() -> None:
         writer.writeheader()
         writer.writerows(summary)
     write_report_table(summary, args.output_dir / "report_table.md")
-    print(
-        f"all {len(cases)} CPU/GPU validation cases passed; "
+    artifacts = (
         f"artifacts: {args.output_dir / 'summary.csv'}, "
         f"{args.output_dir / 'environment.txt'}, "
         f"{args.output_dir / 'report_table.md'}"
+    )
+    if failures:
+        raise SystemExit(
+            f"{len(failures)} of {len(cases)} CPU/GPU validation cases failed: "
+            f"{', '.join(failures)}; {artifacts}"
+        )
+    print(
+        f"all {len(cases)} CPU/GPU validation cases passed; "
+        f"{artifacts}"
     )
 
 

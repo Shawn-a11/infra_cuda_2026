@@ -128,10 +128,18 @@ python3 scripts/run_gpu_validation.py \
 
 The matrix covers GBM/Heston/local volatility, pseudo-random and Halton paths,
 Greeks, and American LSM. Prices use a joint-standard-error gate; Greeks use
-explicit absolute/relative tolerances. A failed gate exits non-zero. A passing
-run writes `summary.csv`, `environment.txt`, and a report-ready
-`report_table.md`; retain the per-case CPU/GPU result and performance logs
-beside those three summary artifacts.
+explicit absolute/relative tolerances. American pseudo-random validation uses
+the dedicated `simulation_american_validation.txt` configuration with 200,000
+paths and a 1% spot bump because finite-difference LSM Gamma is especially
+sensitive to path noise. Other pseudo-random cases retain the faster smoke
+configuration.
+
+The driver runs every requested case even if an earlier gate fails, writes
+`summary.csv`, `environment.txt`, and a report-ready `report_table.md`, then
+exits non-zero if any case failed. Retain the per-case CPU/GPU result and
+performance logs beside those three summary artifacts. Exact CPU/GPU Halton
+agreement is implementation-parity evidence; American Greek accuracy must also
+be checked against the independent CRR tree reference.
 
 ## Reproducible experiment sweep
 

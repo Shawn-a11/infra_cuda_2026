@@ -27,9 +27,10 @@ CPU/CUDA 共享产品、模型、方差缩减、随机数与有限差分口径�
 
 主实验包含 GBM/Heston/Local Vol、European/Asian/Barrier/American、pseudo/Halton、Greeks 和可选多 GPU。每个报告结论保存配置、seed、环境、原始结果、comparison CSV 和 profiler 文件。
 
+American LSM 的有限差分 Gamma 对路径噪声和提前行权边界更敏感，正式伪随机 CPU/GPU gate 因此使用 200,000 条路径和 1% spot bump；其他模型仍使用快速 smoke 配置。Halton 案例用于验证共享低差异序列下的 CPU/GPU 实现一致性，但只有在同时对照 CRR 树或其他独立 reference 后，才作为 American Gamma 的绝对精度证据。
+
 ## References
 
 - Black and Scholes (1973), *The Pricing of Options and Corporate Liabilities*.
 - Heston (1993), *A Closed-Form Solution for Options with Stochastic Volatility*.
 - Longstaff and Schwartz (2001), *Valuing American Options by Simulation*.
-
