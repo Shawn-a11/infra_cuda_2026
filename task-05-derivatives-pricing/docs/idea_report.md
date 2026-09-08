@@ -1,0 +1,35 @@
+# Idea Report
+
+## Part 1 — Motivation
+
+任务五以 Monte Carlo 衍生品定价为核心，目标是在同一工程中建立可解释 CPU reference、CUDA 并行实现、统计误差与性能证据链。
+
+### Research Questions
+
+- RQ1：各产品/模型在 CPU 与 CUDA 上能否在联合统计容差内一致？
+- RQ2：方差缩减与 QMC 如何影响误差、标准误和吞吐？
+- RQ3：GPU kernel、归约与多 GPU 分区分别带来多少性能收益？
+
+### Key Works
+
+| 方法 | 工程用途 |
+|---|---|
+| Black–Scholes | European 解析价格与 Greeks reference |
+| Heston | 随机波动率路径模型 |
+| Longstaff–Schwartz | American 提前行权回归 |
+| Randomized QMC | Halton shift replication 与标准误估计 |
+
+## Part 2 — Method
+
+CPU/CUDA 共享产品、模型、方差缩减、随机数与有限差分口径；价格门禁使用联合标准误，Greeks 使用显式绝对/相对容差。American LSM 的小型线性方程由 host 求解，其余路径与回归矩由 CUDA 处理。
+
+## Part 3 — Experiment Design
+
+主实验包含 GBM/Heston/Local Vol、European/Asian/Barrier/American、pseudo/Halton、Greeks 和可选多 GPU。每个报告结论保存配置、seed、环境、原始结果、comparison CSV 和 profiler 文件。
+
+## References
+
+- Black and Scholes (1973), *The Pricing of Options and Corporate Liabilities*.
+- Heston (1993), *A Closed-Form Solution for Options with Stochastic Volatility*.
+- Longstaff and Schwartz (2001), *Valuing American Options by Simulation*.
+

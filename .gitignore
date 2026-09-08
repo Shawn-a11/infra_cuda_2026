@@ -1,0 +1,19 @@
+.DS_Store
+**/.DS_Store
+
+# CMake and local build artifacts
+**/build*/
+
+# Generated datasets, experiment outputs, and profiler captures
+**/data/generated/
+**/data/smoke/
+**/outputs/
+**/*.ncu-rep
+**/*.nsys-rep
+
+# Python caches
+**/__pycache__/
+*.py[cod]
+
+# Keep the original assignment handout local.
+/2026夏季训练营 CUDA 方向项目.pdf
