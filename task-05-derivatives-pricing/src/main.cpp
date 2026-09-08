@@ -1,6 +1,7 @@
 #include "pricing/pricing.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
