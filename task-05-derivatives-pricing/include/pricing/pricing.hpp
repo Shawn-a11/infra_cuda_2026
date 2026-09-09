@@ -99,6 +99,9 @@ std::string to_string(VarianceReduction mode);
 double black_scholes_price(const OptionParams& option);
 GreekEstimates black_scholes_greeks(const OptionParams& option);
 double american_binomial_price(const OptionParams& option, int steps = 2000);
+GreekEstimates american_binomial_greeks(
+    const OptionParams& option, double spot_bump_relative,
+    double volatility_bump_absolute, int steps = 2000);
 PathEvaluation evaluate_path(const OptionParams& option,
                              const SimulationParams& simulation,
                              const std::vector<double>& standard_normals);

@@ -131,15 +131,21 @@ Greeks, and American LSM. Prices use a joint-standard-error gate; Greeks use
 explicit absolute/relative tolerances. American pseudo-random validation uses
 the dedicated `simulation_american_validation.txt` configuration with 200,000
 paths and a 1% spot bump because finite-difference LSM Gamma is especially
-sensitive to path noise. Other pseudo-random cases retain the faster smoke
-configuration.
+sensitive to path noise. American Halton uses the dedicated
+`simulation_american_qmc_validation.txt` configuration with 131,072 paths and
+64 steps; other cases retain the faster smoke configurations.
 
 The driver runs every requested case even if an earlier gate fails, writes
 `summary.csv`, `environment.txt`, and a report-ready `report_table.md`, then
 exits non-zero if any case failed. Retain the per-case CPU/GPU result and
 performance logs beside those three summary artifacts. Exact CPU/GPU Halton
 agreement is implementation-parity evidence; American Greek accuracy must also
-be checked against the independent CRR tree reference.
+be checked against the independent CRR tree reference. The generated comparison
+rows therefore contain separate backend-parity and reference-accuracy fields.
+Black-Scholes European rows use analytic price/Greeks; Black-Scholes American
+rows use a 2,000-step CRR price and finite-difference CRR Greeks. Models without
+an independent reference are explicitly marked `n/a` rather than silently
+treated as correct.
 
 ## Reproducible experiment sweep
 

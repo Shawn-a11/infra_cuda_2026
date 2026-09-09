@@ -61,15 +61,19 @@ def write_report_table(rows: list[dict[str, str]], output_path: Path) -> None:
     """把机器可读 gate 转为 REPORT.md 可直接引用的草表。"""
     header = (
         "| Case | Option config | Simulation config | Metric | CPU | GPU | "
-        "Abs. diff | Tolerance | Pass |\n"
-        "|---|---|---|---|---:|---:|---:|---:|---|\n"
+        "Abs. diff | Backend tol. | Reference | CPU ref. err. | GPU ref. err. | "
+        "Ref. pass | Overall pass |\n"
+        "|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---|---|\n"
     )
     lines = [header]
     for row in rows:
         fields = [
             row["case"], row["option_config"], row["simulation_config"],
             row["metric"], row["cpu"], row["gpu"],
-            row["absolute_difference"], row["tolerance"], row["passed"],
+            row["absolute_difference"], row["tolerance"],
+            row.get("reference", ""), row.get("cpu_reference_error", ""),
+            row.get("gpu_reference_error", ""),
+            row.get("reference_passed", "n/a"), row["passed"],
         ]
         lines.append("| " + " | ".join(markdown_cell(value) for value in fields) + " |\n")
     output_path.write_text("".join(lines), encoding="utf-8")
@@ -94,7 +98,11 @@ def main() -> None:
             "american_put.txt",
             "simulation_american_validation.txt",
         ),
-        ("american_qmc", "american_put.txt", "simulation_qmc_smoke.txt"),
+        (
+            "american_qmc",
+            "american_put.txt",
+            "simulation_american_qmc_validation.txt",
+        ),
     ]
     if args.include_multi_gpu:
         cases.append(("multi_gpu", "european_call.txt", "simulation_multi_gpu.txt"))
@@ -130,6 +138,14 @@ def main() -> None:
                     "gpu": "",
                     "absolute_difference": "",
                     "tolerance": "",
+                    "backend_passed": "false",
+                    "reference": "",
+                    "reference_method": "not_available",
+                    "cpu_reference_error": "",
+                    "gpu_reference_error": "",
+                    "cpu_reference_tolerance": "",
+                    "gpu_reference_tolerance": "",
+                    "reference_passed": "n/a",
                     "passed": "false",
                     "rule": f"compare_cpu_gpu exited with {completed.returncode}",
                 }

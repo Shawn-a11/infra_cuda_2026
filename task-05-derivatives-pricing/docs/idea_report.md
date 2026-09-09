@@ -29,6 +29,8 @@ CPU/CUDA 共享产品、模型、方差缩减、随机数与有限差分口径�
 
 American LSM 的有限差分 Gamma 对路径噪声和提前行权边界更敏感，正式伪随机 CPU/GPU gate 因此使用 200,000 条路径和 1% spot bump；其他模型仍使用快速 smoke 配置。Halton 案例用于验证共享低差异序列下的 CPU/GPU 实现一致性，但只有在同时对照 CRR 树或其他独立 reference 后，才作为 American Gamma 的绝对精度证据。
 
+正式 accuracy matrix 将“后端一致性”和“独立 reference 一致性”同时记录：Black–Scholes European 的价格与 Greeks 对照解析解，Black–Scholes American 的价格与有限差分 Greeks 对照 2,000 步 CRR 树。Heston 与 Local Vol 暂无独立闭式 reference，矩阵只对它们执行 CPU/GPU gate，并在报告中明确这一边界。American Halton 使用独立于通用 smoke 的更高路径数配置，避免把低样本 QMC 的二阶差分噪声误当作正确性结论。
+
 ## References
 
 - Black and Scholes (1973), *The Pricing of Options and Corporate Liabilities*.

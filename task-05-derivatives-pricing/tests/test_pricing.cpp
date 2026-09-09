@@ -49,12 +49,19 @@ void test_config_parser() {
       pricing::load_option_params(root + "/configs/heston_call.txt");
   const auto qmc =
       pricing::load_simulation_params(root + "/configs/simulation_qmc_smoke.txt");
+  const auto american_qmc = pricing::load_simulation_params(
+      root + "/configs/simulation_american_qmc_validation.txt");
   require(heston.model == pricing::ModelType::kHeston &&
               heston.heston_rho == -0.7,
           "Heston configuration parser failed");
   require(qmc.rng == "halton" && qmc.qmc_replications == 8 &&
               qmc.compute_greeks,
           "advanced simulation parser failed");
+  require(american_qmc.rng == "halton" &&
+              american_qmc.num_paths == 131072 &&
+              american_qmc.num_steps == 64 &&
+              american_qmc.spot_bump_relative == 0.01,
+          "American QMC validation configuration is wrong");
 }
 
 void test_monte_carlo_convergence() {
@@ -251,27 +258,16 @@ void test_american_lsm() {
   simulation.spot_bump_relative = 0.01;
   simulation.volatility_bump_absolute = 0.002;
   const auto greeks = pricing::estimate_greeks_cpu(american, simulation);
-  auto spot_up = american;
-  auto spot_down = american;
-  const double spot_bump = american.spot * simulation.spot_bump_relative;
-  spot_up.spot += spot_bump;
-  spot_down.spot -= spot_bump;
-  const double tree_up = pricing::american_binomial_price(spot_up, 2000);
-  const double tree_down = pricing::american_binomial_price(spot_down, 2000);
-  const double tree_delta = (tree_up - tree_down) / (2.0 * spot_bump);
-  const double tree_gamma =
-      (tree_up - 2.0 * binomial + tree_down) / (spot_bump * spot_bump);
-  auto vol_up = american;
-  auto vol_down = american;
-  vol_up.volatility += simulation.volatility_bump_absolute;
-  vol_down.volatility -= simulation.volatility_bump_absolute;
-  const double tree_vega =
-      (pricing::american_binomial_price(vol_up, 2000) -
-       pricing::american_binomial_price(vol_down, 2000)) /
-      (2.0 * simulation.volatility_bump_absolute);
-  require(std::abs(greeks.delta - tree_delta) < 0.08 &&
-              std::abs(greeks.gamma - tree_gamma) < 0.04 &&
-              std::abs(greeks.vega - tree_vega) < 6.0,
+  const auto tree_greeks = pricing::american_binomial_greeks(
+      american, simulation.spot_bump_relative,
+      simulation.volatility_bump_absolute);
+  require(tree_greeks.gamma > 0.0 && tree_greeks.vega > 0.0 &&
+              tree_greeks.method ==
+                  "central_finite_difference_crr_binomial_2000_steps",
+          "American CRR Greeks reference is invalid");
+  require(std::abs(greeks.delta - tree_greeks.delta) < 0.08 &&
+              std::abs(greeks.gamma - tree_greeks.gamma) < 0.04 &&
+              std::abs(greeks.vega - tree_greeks.vega) < 6.0,
           "American finite-difference Greeks are inconsistent with CRR");
 
   simulation.rng = "halton";

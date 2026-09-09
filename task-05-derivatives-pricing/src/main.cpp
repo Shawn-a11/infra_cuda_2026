@@ -88,6 +88,8 @@ void write_outputs(const Arguments& arguments,
                    std::uint64_t reference_seed,
                    const std::optional<pricing::Estimate>& cpu_benchmark,
                    const std::optional<pricing::GreekEstimates>& greeks,
+                   const std::optional<pricing::GreekEstimates>&
+                       reference_greeks,
                    double pricing_total_ms) {
   // 同时记录“配置请求的 RNG”和“后端实际使用的 RNG”；CPU 后端不会调用
   // cuRAND，避免实验表把 curand 误写成 CPU 随机数生成器。
@@ -106,6 +108,7 @@ void write_outputs(const Arguments& arguments,
   }
   const bool american = option.type == pricing::OptionType::kAmericanCall ||
                         option.type == pricing::OptionType::kAmericanPut;
+  const double missing = std::numeric_limits<double>::quiet_NaN();
   result << std::setprecision(12)
          << "option_type=" << pricing::to_string(option.type) << '\n'
          << "model=" << pricing::to_string(option.model) << '\n'
@@ -142,7 +145,6 @@ void write_outputs(const Arguments& arguments,
          << "standard_error=" << estimate.standard_error << '\n'
          << "confidence_95_low=" << estimate.confidence_low << '\n'
          << "confidence_95_high=" << estimate.confidence_high << '\n';
-  const double missing = std::numeric_limits<double>::quiet_NaN();
   result << "greeks_computed=" << (greeks ? "true" : "false") << '\n'
          << "delta=" << (greeks ? greeks->delta : missing) << '\n'
          << "gamma=" << (greeks ? greeks->gamma : missing) << '\n'
@@ -150,6 +152,15 @@ void write_outputs(const Arguments& arguments,
          << "greeks_method=" << (greeks ? greeks->method : "not_computed")
          << '\n'
          << "greeks_backend=" << (greeks ? greeks->backend : "not_computed")
+         << '\n'
+         << "reference_delta="
+         << (reference_greeks ? reference_greeks->delta : missing) << '\n'
+         << "reference_gamma="
+         << (reference_greeks ? reference_greeks->gamma : missing) << '\n'
+         << "reference_vega="
+         << (reference_greeks ? reference_greeks->vega : missing) << '\n'
+         << "reference_greeks_method="
+         << (reference_greeks ? reference_greeks->method : "not_available")
          << '\n';
 
   ensure_parent_directory(arguments.performance_path);
@@ -315,9 +326,19 @@ int main(int argc, char** argv) {
           std::to_string(reference_estimate->estimator_samples) + "_samples";
     }
 
+    std::optional<pricing::GreekEstimates> reference_greeks;
+    if (greeks && is_black_scholes_european) {
+      reference_greeks = pricing::black_scholes_greeks(option);
+    } else if (greeks && is_black_scholes_american) {
+      // American exercise boundary 不光滑，因此与估值端保持至少 1% spot bump。
+      reference_greeks = pricing::american_binomial_greeks(
+          option, std::max(simulation.spot_bump_relative, 1e-2),
+          simulation.volatility_bump_absolute);
+    }
+
     write_outputs(arguments, option, simulation, estimate, reference,
                   reference_method, reference_estimate, reference_seed,
-                  cpu_benchmark, greeks, pricing_total_ms);
+                  cpu_benchmark, greeks, reference_greeks, pricing_total_ms);
     std::cout << std::setprecision(10) << "price=" << estimate.price
               << " standard_error=" << estimate.standard_error
               << " ci95=[" << estimate.confidence_low << ", "

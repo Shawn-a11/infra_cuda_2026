@@ -699,6 +699,56 @@ double american_binomial_price(const OptionParams& option, int steps) {
   return values.front();
 }
 
+GreekEstimates american_binomial_greeks(
+    const OptionParams& option, double spot_bump_relative,
+    double volatility_bump_absolute, int steps) {
+  // 使用与 Monte Carlo Greeks 相同的中心差分口径，但把五次估值替换为
+  // 确定性的 CRR 树，从而识别 CPU/CUDA 可能共同存在的偏差。
+  if (!is_american(option.type) ||
+      option.model != ModelType::kBlackScholes || option.volatility <= 0.0 ||
+      spot_bump_relative <= 0.0 || volatility_bump_absolute <= 0.0 ||
+      steps <= 0) {
+    throw std::invalid_argument(
+        "American CRR Greeks require positive bumps and GBM volatility");
+  }
+  const auto start = std::chrono::steady_clock::now();
+  const double spot_bump = option.spot * spot_bump_relative;
+  if (!(spot_bump > 0.0) || option.spot <= spot_bump) {
+    throw std::invalid_argument("invalid spot bump for American CRR Greeks");
+  }
+  // 保证下扰动仍为正数，维持 Vega 的严格中心差分；即使波动率极小也不
+  // 通过截断到 0 悄悄改变差分公式。
+  const double volatility_bump =
+      std::min(volatility_bump_absolute, option.volatility * 0.5);
+
+  OptionParams spot_up = option;
+  OptionParams spot_down = option;
+  spot_up.spot += spot_bump;
+  spot_down.spot -= spot_bump;
+  OptionParams vol_up = option;
+  OptionParams vol_down = option;
+  vol_up.volatility += volatility_bump;
+  vol_down.volatility -= volatility_bump;
+
+  const double base = american_binomial_price(option, steps);
+  const double up = american_binomial_price(spot_up, steps);
+  const double down = american_binomial_price(spot_down, steps);
+  const double v_up = american_binomial_price(vol_up, steps);
+  const double v_down = american_binomial_price(vol_down, steps);
+
+  GreekEstimates greeks;
+  greeks.delta = (up - down) / (2.0 * spot_bump);
+  greeks.gamma = (up - 2.0 * base + down) / (spot_bump * spot_bump);
+  greeks.vega = (v_up - v_down) / (2.0 * volatility_bump);
+  greeks.elapsed_ms = std::chrono::duration<double, std::milli>(
+                          std::chrono::steady_clock::now() - start)
+                          .count();
+  greeks.method = "central_finite_difference_crr_binomial_" +
+                  std::to_string(steps) + "_steps";
+  greeks.backend = "crr_binomial";
+  return greeks;
+}
+
 Estimate price_cpu(const OptionParams& option,
                    const SimulationParams& simulation) {
   // 统一 CPU 入口按产品和 RNG 分派；每个分支都有对应 CUDA 实现与比较口径。

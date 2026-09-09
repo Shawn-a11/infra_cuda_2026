@@ -91,3 +91,36 @@ CUDA 衍生品定价、风险估计与 CPU reference 工程。
 | 无 CUDA 失败路径覆盖 | 首个 case 后中止 | 8/8 case 均执行并汇总 | 完整 |
 
 **结论**：迭代有效。服务器证据支持将原失败归因于 50k 路径下 American LSM Gamma 的统计波动；没有放宽门限或更改算法。本地无 CUDA 演练确认矩阵会保留完整失败清单和汇总产物。更新后的真实 CUDA 全矩阵仍需在 RTX 5090 上复跑后归档。
+
+### 2026-09-09 — 迭代 #3：独立 reference gate 诊断与设计
+
+**改动原因**：RTX 5090 矩阵已达到 8/8 cases、32/32 CPU/GPU 指标通过，但现有汇总只证明后端一致性，未展示 Black–Scholes/CRR 的独立价格与 Greeks reference。当前 American QMC Gamma 为 `-0.0031627`，虽然 CPU/GPU 完全相同，仍不能作为绝对精度证据。
+**改动范围**：新增解析/CRR reference 输出与门禁，并为 American QMC 选择更稳定的正式配置；不修改 Monte Carlo、LSM 或 CUDA 算法。
+**预期效果**：报告表能够直接区分 backend parity 和 financial-reference accuracy，防止共同误差被一致性 gate 掩盖。
+**文档同步**：idea_report.md 是 | implementation.md 是 | configs/ 待完成
+
+### 2026-09-09 — 迭代 #3：解析/CRR reference gate 实现
+
+**改动内容**：
+- `include/pricing/pricing.hpp`、`src/pricing_cpu.cpp`：新增 American 2,000 步 CRR 中心差分 Greeks reference，使用与估值端一致的 bump。
+- `src/main.cpp`：结果文件新增 `reference_delta/gamma/vega` 与 reference method；European 使用 Black–Scholes 解析 Greeks，American 使用 CRR Greeks。
+- `scripts/compare_cpu_gpu.py`：分别记录 backend parity 与每个后端的 reference error/tolerance，并合并为 overall gate。
+- `scripts/run_gpu_validation.py`：报告草表展示 reference 误差与状态，American Halton 改用专用正式配置。
+- `configs/simulation_american_qmc_validation.txt`：固定 131,072 路径、64 步、8 个 randomized-Halton replications 和 1% spot bump。
+- `tests/test_pricing.cpp`、`README.md`、`REPORT.md`：补 reference API/config 回归与报告口径。
+**预期效果**：CPU/GPU 即使共同偏离 Black–Scholes/CRR，也不能通过正式矩阵；无独立 reference 的模型明确标记为 `n/a`。
+**文档同步**：idea_report.md 是 | implementation.md 是 | configs/ 是
+
+### 2026-09-09 — 迭代 #3 本地结果
+
+| 指标 | 旧 American QMC smoke | 新 American QMC validation | Reference |
+|---|---:|---:|---:|
+| Paths / steps | 16,384 / 32 | 131,072 / 64 | — |
+| Price | 6.7995046 | 6.7413820 | CRR 6.7425208 |
+| Price 绝对误差 | 0.0569838 | 0.0011388 | — |
+| Gamma | -0.0031627 | 0.0133855 | CRR 0.0225197 |
+| Gamma 绝对误差 | 0.0256824 | 0.0091342 | 门限 0.01 |
+
+**验证**：Release CPU CTest 1/1 通过，UBSan CPU CTest 1/1 通过，Python compileall 通过；本机无 CUDA 的矩阵演练仍执行并记录全部 8 个失败 case。对新 American QMC 本地结果模拟同值 CPU/GPU 时，price/Delta/Gamma/Vega 四个 reference gates 全部通过。
+
+**结论**：新 QMC 正式配置显著减小 American LSM 的价格与二阶差分偏差，并通过当前独立 CRR 门限。真实 CUDA 后端仍需在 RTX 5090 上重新构建并执行矩阵，确认 GPU reference gates。

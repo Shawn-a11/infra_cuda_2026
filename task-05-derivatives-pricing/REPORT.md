@@ -76,11 +76,13 @@ to a measured bottleneck.
 Retain `scripts/run_gpu_validation.py` output. For randomized Halton, report
 the independent shift count and across-shift standard error. For American GBM,
 use the dedicated 200,000-path pseudo-random validation configuration and
-compare CPU and GPU LSM against the CRR binomial reference. Treat exact Halton
-CPU/GPU agreement as implementation-parity evidence rather than, by itself,
-proof of Greek accuracy. Copy verified rows from `report_table.md`, and archive
-the adjacent `summary.csv` and `environment.txt`; do not hand-transcribe GPU
-values from terminal output.
+the dedicated 131,072-path/64-step Halton configuration, then compare CPU and
+GPU LSM against the 2,000-step CRR price and finite-difference Greeks. Treat
+exact Halton CPU/GPU agreement as implementation-parity evidence rather than,
+by itself, proof of Greek accuracy. `backend_passed` and `reference_passed`
+must both succeed when a reference is available. Copy verified rows from
+`report_table.md`, and archive the adjacent `summary.csv` and `environment.txt`;
+do not hand-transcribe GPU values from terminal output.
 
 ## 8. Limitations and next steps
 
