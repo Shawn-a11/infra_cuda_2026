@@ -101,3 +101,33 @@ GPU exact 与 IVF-Flat 向量检索、CPU ground truth 和性能评估工程。
 - 本地 CPU：`cmake --build build -j && ctest --test-dir build --output-on-failure`
 - 服务器 gate：`python3 scripts/run_gpu_validation.py --binary build/vector_search --output-dir outputs/gpu_validation`
 - 正式实验：另行生成 N≥1,000,000、D=128、Q≥1,000 数据，再运行 sweep 与 ncu/nsys。
+
+### 2026-09-09 — 迭代 #2：GPU 首跑前验证链审计
+
+**改动原因**：现有 IVF gate 只比较 CPU/GPU 各自相对 ground truth 的聚合质量值；两个聚合误差可能相同，但具体 ID/score 仍可能不同。IVF 候选按 coarse-list 顺序拼接，也没有显式保证 CUDA 稳定排序在重复 score 时采用全局较小 ID。
+**改动范围**：增强 tie policy 和验收证据，不改变距离公式、IVF 候选集合、K-means 或性能容差。
+**预期效果**：CPU/GPU 输出逐项相同时才通过 parity gate；任何单项执行失败仍能得到完整矩阵汇总，便于 RTX 5090 首轮定位。
+**文档同步**：idea_report.md 是 | implementation.md 是 | configs/ 否
+
+### 2026-09-09 — 迭代 #2：直接结果门禁与失败汇总实现
+
+**改动内容**：
+- `src/ivf.cpp`：coarse probe 后按 vector ID 整理候选，固定 CUDA stable radix sort 的重复分数 tie-break。
+- `scripts/run_gpu_validation.py`：逐 query/rank 解析 CPU/GPU result，新增 direct rank agreement、mean/max score error；清理陈旧产物；单项异常转为结构化 failure row 后继续。
+- `tests/test_vector_search.cpp`：新增跨倒排表、乱序 ID、全重复 score 的 IVF tie 回归。
+- `README.md`、`REPORT.md`：同步直接门禁和报告证据要求。
+**预期效果**：30 项默认矩阵既验证相对 CPU exact 的质量，也验证两后端实际输出逐项一致。
+**文档同步**：idea_report.md 是 | implementation.md 是 | configs/ 否
+
+### 2026-09-09 — 迭代 #2 本地结果
+
+| 指标 | 结果 |
+|---|---:|
+| Release CPU CTest | 1/1 通过 |
+| UBSan CPU CTest | 1/1 通过 |
+| Python py_compile/compileall | 通过 |
+| 直接 result helper | identical file = rank 1.0、mean/max error 0 |
+| CPU-as-CUDA 成功编排演练 | 30/30 case 通过，direct rank 1.0、max score error 0 |
+| 无 CUDA 失败矩阵 | 30/30 case 均执行并写入 failure row |
+
+**结论**：CPU/索引回归通过，验证驱动器在本机无 CUDA 的预期失败条件下仍生成 30 行、28 列完整汇总。ASan 在当前 macOS 沙箱未完成，不计为通过证据。真实 CUDA compile、CTest 和 30 项数值门禁仍需在 RTX 5090 上执行。

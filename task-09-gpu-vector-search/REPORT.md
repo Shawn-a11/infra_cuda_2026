@@ -32,11 +32,13 @@ K=100, FP16 payloads, and index reload.
 Recall checks whether the same IDs appear in the Top-K set; rank ID agreement
 is stricter and checks the ID at every position. For exact CPU/GPU comparison,
 report both together with the score tolerance and deterministic tie policy.
-Retain the full `scripts/run_gpu_validation.py` directory: copy checked rows
-from `report_table.md`, and archive `summary.csv`, `commands.txt`,
-`environment.txt`, per-case logs, and the recorded database/query SHA-256.
-The default validation size is only a correctness gate; the formal table must
-still include at least N=1,000,000, D=128, and Q=1,000.
+The formal gate also requires direct CPU/GPU rank agreement of 1.0 and maximum
+per-result score error within tolerance; equality of two aggregate quality
+numbers alone is insufficient. Retain the full `scripts/run_gpu_validation.py`
+directory: copy checked rows from `report_table.md`, and archive `summary.csv`,
+`commands.txt`, `environment.txt`, per-case logs, and the recorded
+database/query SHA-256. The default validation size is only a correctness gate;
+the formal table must still include at least N=1,000,000, D=128, and Q=1,000.
 
 ## 5. Recall/performance trade-off
 

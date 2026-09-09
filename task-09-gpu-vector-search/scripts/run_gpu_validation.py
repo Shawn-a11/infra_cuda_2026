@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import csv
 import hashlib
+import math
 import platform
 import shlex
 import shutil
@@ -85,6 +86,57 @@ def read_key_values(path: Path) -> dict[str, str]:
     return values
 
 
+def read_results(path: Path) -> list[list[tuple[int, float]]]:
+    """解析逐 query 的 id:score，严格检查 query 编号和结果形状。"""
+    rows: list[list[tuple[int, float]]] = []
+    for expected_query, raw_line in enumerate(
+        path.read_text(encoding="utf-8").splitlines()
+    ):
+        fields = raw_line.split()
+        if not fields or int(fields[0]) != expected_query:
+            raise ValueError(f"invalid query row in {path}: {raw_line!r}")
+        entries: list[tuple[int, float]] = []
+        for field in fields[1:]:
+            vector_id, score = field.split(":", 1)
+            entries.append((int(vector_id), float(score)))
+        rows.append(entries)
+    if not rows:
+        raise ValueError(f"empty result file: {path}")
+    return rows
+
+
+def compare_results(
+    cpu_path: Path, gpu_path: Path
+) -> tuple[float, float, float]:
+    """逐 rank 对照 ID/score，避免聚合质量值相同掩盖具体结果差异。"""
+    cpu = read_results(cpu_path)
+    gpu = read_results(gpu_path)
+    if len(cpu) != len(gpu) or any(
+        len(cpu_row) != len(gpu_row)
+        for cpu_row, gpu_row in zip(cpu, gpu, strict=True)
+    ):
+        raise ValueError("CPU/GPU result shapes do not match")
+    total = 0
+    id_matches = 0
+    score_errors: list[float] = []
+    for cpu_row, gpu_row in zip(cpu, gpu, strict=True):
+        for (cpu_id, cpu_score), (gpu_id, gpu_score) in zip(
+            cpu_row, gpu_row, strict=True
+        ):
+            total += 1
+            id_matches += int(cpu_id == gpu_id)
+            if not (math.isfinite(cpu_score) and math.isfinite(gpu_score)):
+                raise ValueError("CPU/GPU result contains a non-finite score")
+            score_errors.append(abs(cpu_score - gpu_score))
+    if total == 0:
+        raise ValueError("CPU/GPU result contains no neighbors")
+    return (
+        id_matches / total,
+        sum(score_errors) / total,
+        max(score_errors),
+    )
+
+
 def write_config(
     path: Path,
     *,
@@ -136,6 +188,12 @@ def run_search(
     index: Path | None = None,
 ) -> dict[str, str]:
     case_dir.mkdir(parents=True, exist_ok=True)
+    result_path = case_dir / f"{backend}.results.txt"
+    performance_path = case_dir / f"{backend}.performance.log"
+    quality_path = case_dir / f"{backend}.quality.log"
+    # 避免本次命令失败后误读同目录上一轮留下的结果。
+    for stale_path in (result_path, performance_path, quality_path):
+        stale_path.unlink(missing_ok=True)
     command = [
         str(binary),
         "search",
@@ -148,17 +206,17 @@ def run_search(
         "--backend",
         backend,
         "--output",
-        str(case_dir / f"{backend}.results.txt"),
+        str(result_path),
         "--performance",
-        str(case_dir / f"{backend}.performance.log"),
+        str(performance_path),
         "--quality",
-        str(case_dir / f"{backend}.quality.log"),
+        str(quality_path),
     ]
     if index is not None:
         command.extend(["--index", str(index)])
     run(command, command_log)
-    values = read_key_values(case_dir / f"{backend}.performance.log")
-    values.update(read_key_values(case_dir / f"{backend}.quality.log"))
+    values = read_key_values(performance_path)
+    values.update(read_key_values(quality_path))
     return values
 
 
@@ -173,6 +231,9 @@ def gate_row(
     database_hash: str,
     query_hash: str,
     score_tolerance: float,
+    direct_rank_agreement: float,
+    direct_mean_score_error: float,
+    direct_max_score_error: float,
 ) -> dict[str, str]:
     """Exact 使用绝对真值 gate；IVF 比较同一索引上的 CPU/GPU 质量统计。"""
     cpu_recall = float(cpu["recall_at_k"])
@@ -184,17 +245,23 @@ def gate_row(
     recall_difference = abs(cpu_recall - gpu_recall)
     rank_difference = abs(cpu_rank - gpu_rank)
     score_error_difference = abs(cpu_score_error - gpu_score_error)
+    direct_passed = (
+        direct_rank_agreement >= 1.0 - 1.0e-12
+        and direct_max_score_error <= score_tolerance
+    )
     if mode == "exact":
         passed = (
             gpu_recall >= 1.0 - 1.0e-12
             and gpu_rank >= 1.0 - 1.0e-12
             and gpu_score_error <= score_tolerance
+            and direct_passed
         )
     else:
         passed = (
             recall_difference <= 1.0e-12
             and rank_difference <= 1.0e-12
             and score_error_difference <= score_tolerance
+            and direct_passed
         )
     cpu_qps = float(cpu["qps"])
     gpu_qps = float(gpu["qps"])
@@ -219,10 +286,64 @@ def gate_row(
         "gpu_rank_agreement": f"{gpu_rank:.17g}",
         "rank_difference": f"{rank_difference:.17g}",
         "score_error_difference": f"{score_error_difference:.17g}",
+        "cpu_gpu_rank_agreement": f"{direct_rank_agreement:.17g}",
+        "cpu_gpu_mean_score_absolute_error": f"{direct_mean_score_error:.17g}",
+        "cpu_gpu_max_score_absolute_error": f"{direct_max_score_error:.17g}",
         "score_tolerance": f"{score_tolerance:.17g}",
         "database_sha256": database_hash,
         "queries_sha256": query_hash,
         "passed": str(passed).lower(),
+        "error": "",
+    }
+
+
+def execution_failure_row(
+    *,
+    mode: str,
+    metric: str,
+    dtype: str,
+    top_k: int,
+    num_vectors: int,
+    dim: int,
+    num_queries: int,
+    batch_size: int,
+    nlist: int,
+    nprobe: int,
+    score_tolerance: float,
+    database_hash: str,
+    query_hash: str,
+    error: Exception,
+) -> dict[str, str]:
+    """失败案例保留完整列，使后续成功案例仍可写入同一 CSV。"""
+    return {
+        "mode": mode,
+        "metric": metric,
+        "dtype": dtype,
+        "top_k": str(top_k),
+        "num_vectors": str(num_vectors),
+        "dim": str(dim),
+        "num_queries": str(num_queries),
+        "batch_size": str(batch_size),
+        "nlist": str(nlist),
+        "nprobe": str(nprobe),
+        "cpu_qps": "",
+        "gpu_qps": "",
+        "speedup": "",
+        "cpu_recall_at_k": "",
+        "gpu_recall_at_k": "",
+        "recall_difference": "",
+        "cpu_rank_agreement": "",
+        "gpu_rank_agreement": "",
+        "rank_difference": "",
+        "score_error_difference": "",
+        "cpu_gpu_rank_agreement": "",
+        "cpu_gpu_mean_score_absolute_error": "",
+        "cpu_gpu_max_score_absolute_error": "",
+        "score_tolerance": f"{score_tolerance:.17g}",
+        "database_sha256": database_hash,
+        "queries_sha256": query_hash,
+        "passed": "false",
+        "error": str(error).replace("\n", " "),
     }
 
 
@@ -238,7 +359,8 @@ def write_report_table(rows: list[dict[str, str]], output_path: Path) -> None:
         "speedup",
         "gpu_recall_at_k",
         "gpu_rank_agreement",
-        "score_error_difference",
+        "cpu_gpu_rank_agreement",
+        "cpu_gpu_max_score_absolute_error",
         "passed",
     ]
     labels = [
@@ -251,7 +373,8 @@ def write_report_table(rows: list[dict[str, str]], output_path: Path) -> None:
         "Speedup",
         "GPU Recall@K",
         "GPU Rank agree.",
-        "CPU/GPU score-error diff",
+        "CPU/GPU direct rank",
+        "CPU/GPU max score err.",
         "Pass",
     ]
     lines = [
@@ -290,6 +413,10 @@ def main() -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     command_log = output_dir / "commands.txt"
     command_log.write_text("", encoding="utf-8")
+    summary = output_dir / "summary.csv"
+    report_table = output_dir / "report_table.md"
+    summary.unlink(missing_ok=True)
+    report_table.unlink(missing_ok=True)
     write_environment(output_dir)
 
     rows: list[dict[str, str]] = []
@@ -347,26 +474,32 @@ def main() -> None:
                     quality_queries=args.num_queries,
                     seed=case_seed,
                 )
-                cpu = run_search(
-                    binary=binary,
-                    database=database,
-                    queries=queries,
-                    config=exact_config,
-                    backend="cpu",
-                    case_dir=exact_dir,
-                    command_log=command_log,
-                )
-                gpu = run_search(
-                    binary=binary,
-                    database=database,
-                    queries=queries,
-                    config=exact_config,
-                    backend="cuda",
-                    case_dir=exact_dir,
-                    command_log=command_log,
-                )
-                rows.append(
-                    gate_row(
+                try:
+                    cpu = run_search(
+                        binary=binary,
+                        database=database,
+                        queries=queries,
+                        config=exact_config,
+                        backend="cpu",
+                        case_dir=exact_dir,
+                        command_log=command_log,
+                    )
+                    gpu = run_search(
+                        binary=binary,
+                        database=database,
+                        queries=queries,
+                        config=exact_config,
+                        backend="cuda",
+                        case_dir=exact_dir,
+                        command_log=command_log,
+                    )
+                    direct_rank, direct_mean_score, direct_max_score = (
+                        compare_results(
+                            exact_dir / "cpu.results.txt",
+                            exact_dir / "cuda.results.txt",
+                        )
+                    )
+                    row = gate_row(
                         mode="exact",
                         metric=metric,
                         dtype=dtype,
@@ -376,8 +509,30 @@ def main() -> None:
                         database_hash=database_hash,
                         query_hash=query_hash,
                         score_tolerance=args.score_tolerance,
+                        direct_rank_agreement=direct_rank,
+                        direct_mean_score_error=direct_mean_score,
+                        direct_max_score_error=direct_max_score,
                     )
-                )
+                except (subprocess.CalledProcessError, OSError, ValueError,
+                        KeyError) as error:
+                    print(f"{case}:exact:k{top_k} failed: {error}", file=sys.stderr)
+                    row = execution_failure_row(
+                        mode="exact",
+                        metric=metric,
+                        dtype=dtype,
+                        top_k=top_k,
+                        num_vectors=args.num_vectors,
+                        dim=args.dim,
+                        num_queries=args.num_queries,
+                        batch_size=args.batch_size,
+                        nlist=nlist,
+                        nprobe=nprobe,
+                        score_tolerance=args.score_tolerance,
+                        database_hash=database_hash,
+                        query_hash=query_hash,
+                        error=error,
+                    )
+                rows.append(row)
 
             ivf_dir = case_dir / "ivf"
             ivf_dir.mkdir(parents=True, exist_ok=True)
@@ -394,45 +549,61 @@ def main() -> None:
                 quality_queries=args.num_queries,
                 seed=case_seed,
             )
-            run(
-                [
-                    str(binary),
-                    "build",
-                    "--database",
-                    str(database),
-                    "--config",
-                    str(ivf_config),
-                    "--index",
-                    str(ivf_index),
-                    "--backend",
-                    "cuda",
-                    "--performance",
-                    str(ivf_dir / "cuda.build.log"),
-                ],
-                command_log,
-            )
-            cpu = run_search(
-                binary=binary,
-                database=database,
-                queries=queries,
-                config=ivf_config,
-                backend="cpu",
-                case_dir=ivf_dir,
-                command_log=command_log,
-                index=ivf_index,
-            )
-            gpu = run_search(
-                binary=binary,
-                database=database,
-                queries=queries,
-                config=ivf_config,
-                backend="cuda",
-                case_dir=ivf_dir,
-                command_log=command_log,
-                index=ivf_index,
-            )
-            rows.append(
-                gate_row(
+            try:
+                for backend in ("cpu", "cuda"):
+                    for suffix in (
+                        "results.txt",
+                        "performance.log",
+                        "quality.log",
+                    ):
+                        (ivf_dir / f"{backend}.{suffix}").unlink(missing_ok=True)
+                ivf_index.unlink(missing_ok=True)
+                build_log = ivf_dir / "cuda.build.log"
+                build_log.unlink(missing_ok=True)
+                run(
+                    [
+                        str(binary),
+                        "build",
+                        "--database",
+                        str(database),
+                        "--config",
+                        str(ivf_config),
+                        "--index",
+                        str(ivf_index),
+                        "--backend",
+                        "cuda",
+                        "--performance",
+                        str(build_log),
+                    ],
+                    command_log,
+                )
+                cpu = run_search(
+                    binary=binary,
+                    database=database,
+                    queries=queries,
+                    config=ivf_config,
+                    backend="cpu",
+                    case_dir=ivf_dir,
+                    command_log=command_log,
+                    index=ivf_index,
+                )
+                gpu = run_search(
+                    binary=binary,
+                    database=database,
+                    queries=queries,
+                    config=ivf_config,
+                    backend="cuda",
+                    case_dir=ivf_dir,
+                    command_log=command_log,
+                    index=ivf_index,
+                )
+                direct_rank, direct_mean_score, direct_max_score = (
+                    compare_results(
+                        ivf_dir / "cpu.results.txt",
+                        ivf_dir / "cuda.results.txt",
+                    )
+                )
+                row = gate_row(
                     mode="ivf_flat",
                     metric=metric,
                     dtype=dtype,
@@ -442,26 +613,53 @@ def main() -> None:
                     database_hash=database_hash,
                     query_hash=query_hash,
                     score_tolerance=args.score_tolerance,
+                    direct_rank_agreement=direct_rank,
+                    direct_mean_score_error=direct_mean_score,
+                    direct_max_score_error=direct_max_score,
                 )
-            )
+            except (subprocess.CalledProcessError, OSError, ValueError,
+                    KeyError) as error:
+                print(f"{case}:ivf_flat:k{ivf_top_k} failed: {error}",
+                      file=sys.stderr)
+                row = execution_failure_row(
+                    mode="ivf_flat",
+                    metric=metric,
+                    dtype=dtype,
+                    top_k=ivf_top_k,
+                    num_vectors=args.num_vectors,
+                    dim=args.dim,
+                    num_queries=args.num_queries,
+                    batch_size=args.batch_size,
+                    nlist=nlist,
+                    nprobe=nprobe,
+                    score_tolerance=args.score_tolerance,
+                    database_hash=database_hash,
+                    query_hash=query_hash,
+                    error=error,
+                )
+            rows.append(row)
 
-    summary = output_dir / "summary.csv"
     with summary.open("w", newline="", encoding="utf-8") as stream:
         writer = csv.DictWriter(stream, fieldnames=list(rows[0]))
         writer.writeheader()
         writer.writerows(rows)
-    write_report_table(rows, output_dir / "report_table.md")
+    write_report_table(rows, report_table)
     failed = [
         f"{row['mode']}:{row['metric']}:{row['dtype']}:k{row['top_k']}"
         for row in rows
         if row["passed"] != "true"
     ]
     if failed:
-        raise SystemExit("CPU/GPU validation failed: " + ", ".join(failed))
+        raise SystemExit(
+            "CPU/GPU validation failed: "
+            + ", ".join(failed)
+            + f"; artifacts: {summary}, {output_dir / 'environment.txt'}, "
+            + str(report_table)
+        )
     print(
         f"all {len(rows)} vector-search CPU/GPU gates passed; "
         f"artifacts: {summary}, {output_dir / 'environment.txt'}, "
-        f"{output_dir / 'report_table.md'}"
+        f"{report_table}"
     )
 
 

@@ -139,6 +139,34 @@ void test_ivf_round_trip_and_recall() {
   require(wide_recall + 1e-12 >= narrow_recall &&
               std::abs(wide_recall - 1.0) < 1e-12,
           "IVF recall must not decrease when nprobe expands to all lists");
+
+  // 人为打乱两个倒排表中的 ID；所有向量与 query 距离相同，最终仍必须按
+  // 全局较小 ID 排序，而不是继承 coarse-list 或索引内部顺序。
+  vector_search::VectorDatabase tie_database;
+  tie_database.count = 4;
+  tie_database.dim = 1;
+  tie_database.metric = vector_search::Metric::kL2;
+  tie_database.values = {0.0f, 2.0f, 0.0f, 2.0f};
+  vector_search::QuerySet tie_queries;
+  tie_queries.count = 1;
+  tie_queries.dim = 1;
+  tie_queries.values = {1.0f};
+  vector_search::IvfIndex tie_index;
+  tie_index.num_vectors = 4;
+  tie_index.dim = 1;
+  tie_index.nlist = 2;
+  tie_index.metric = vector_search::Metric::kL2;
+  tie_index.centers = {0.0f, 2.0f};
+  tie_index.offsets = {0, 2, 4};
+  tie_index.ids = {3, 1, 2, 0};
+  config.top_k = 4;
+  config.batch_size = 1;
+  config.nlist = 2;
+  config.nprobe = 2;
+  const auto tied = vector_search::search_ivf(
+      tie_database, tie_queries, tie_index, config, false);
+  require(tied.ids == std::vector<std::int64_t>({0, 1, 2, 3}),
+          "IVF equal scores must use the global vector-id tie-breaker");
 }
 
 void test_binary_readers() {

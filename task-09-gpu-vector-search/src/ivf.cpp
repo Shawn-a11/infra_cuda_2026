@@ -262,6 +262,9 @@ SearchResults search_ivf(const VectorDatabase& database,
       candidates.insert(candidates.end(), index.ids.begin() + begin,
                         index.ids.begin() + end);
     }
+    // CUB radix sort 对相同 score 保持输入顺序；先按全局 vector ID 排序，
+    // 使 CUDA 与 CPU 都实现“score 相同则较小 ID 优先”的确定性规则。
+    std::sort(candidates.begin(), candidates.end());
     const auto end = std::chrono::steady_clock::now();
     coarse_latency[static_cast<std::size_t>(query_index)] =
         std::chrono::duration<double, std::milli>(end - start).count();

@@ -156,10 +156,14 @@ python3 scripts/run_gpu_validation.py \
 
 The default matrix covers L2/inner-product/cosine, FP32/FP16,
 K=1/10/50/100 exact search, CUDA IVF assignment, and CPU/CUDA reranking of the
-same persistent index. It exits non-zero on a failed gate and retains data
-hashes, exact commands, environment information, raw result/quality/performance
-logs, `summary.csv`, and `report_table.md`. Its default 4096-vector dataset is
-a correctness matrix, not the required one-million-vector performance run.
+same persistent index. Each gate directly compares every CPU/GPU result ID and
+score in addition to the per-backend Recall/rank metrics against CPU exact.
+Repeated scores use the global smaller-vector-ID tie policy. The driver attempts
+the remaining matrix after an individual failure, exits non-zero at the end,
+and retains data hashes, exact commands, environment information, raw
+result/quality/performance logs, `summary.csv`, and `report_table.md`. Its
+default 4096-vector dataset is a correctness matrix, not the required
+one-million-vector performance run.
 
 ## Profiling and next optimization
 

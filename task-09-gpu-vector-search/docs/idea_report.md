@@ -22,6 +22,8 @@
 
 CPU 使用固定大小 heap 和 score/id 确定性排序；CUDA 先物化 score/id，再用 CUB 排序。IVF 训练、持久化、coarse probe 和候选 rerank 共享 CPU/CUDA assignment 接口。
 
+CUDA radix sort 对相同 score 保持输入顺序，因此 IVF 候选在送入 CPU/CUDA rerank 前统一按 vector ID 排序，使稳定排序自然实现“score 优先、较小 ID 优先”的全局 tie policy。服务器 gate 除分别对照 CPU exact 的 Recall/排序/score error 外，还直接逐 query、逐 rank 比较 CPU/GPU 输出文件，避免两个聚合误差数值相同却掩盖具体结果差异。
+
 ## Part 3 — Experiment Design
 
 正确性覆盖三种度量、两种输入 dtype、K=1/10/50/100、cosine 零向量、重复分数、索引回读和 IVF `nprobe=nlist`。服务器矩阵对 exact 与 IVF 分别执行 CPU/GPU gate；正式规模至少 N=1,000,000、D=128、Q=1,000。
@@ -30,4 +32,3 @@ CPU 使用固定大小 heap 和 score/id 确定性排序；CUDA 先物化 score/
 
 - Johnson, Douze and Jégou (2017), *Billion-scale similarity search with GPUs*.
 - NVIDIA CUB, *DeviceRadixSort* documentation.
-
